@@ -1,0 +1,17 @@
+[telegram]
+# 환경 변수 CHATGD_TELEGRAM_TOKEN이 설정되어 있으면 이 값을 덮어씁니다.
+token = "YOUR_BOT_TOKEN_HERE"
+
+[security]
+allowed_users = []
+
+[[backends]]
+name = "claude"
+command = ["claude", "--continue", "-p", "{prompt}", "--output-format", "json"]
+trigger = "@claude"
+default = true
+
+[[backends]]
+name = "ollama"
+command = ["ollama", "run", "llama3", "{prompt}"]
+trigger = "@llama"
