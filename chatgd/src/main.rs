@@ -4,8 +4,10 @@ mod session;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::env;
 use std::fs;
 use std::sync::Arc;
+use teloxide::prelude::*;
 use tracing::info;
 
 #[derive(Deserialize)]
@@ -39,13 +41,21 @@ async fn main() -> Result<()> {
 
     let session_manager = Arc::new(session::SessionManager::new("sessions"));
 
+    let token = env::var("CHATGD_TELEGRAM_TOKEN").unwrap_or(config.telegram.token);
+    
+    let bot = Bot::new(&token);
+    let me = bot.get_me().await.context("Failed to get bot info")?;
+    let bot_username = me.username.clone().expect("Bot must have a username");
+    info!("Bot username: @{}", bot_username);
+
     let tg_config = adapter::telegram::TelegramConfig {
-        token: config.telegram.token,
+        token,
+        bot_username,
         allowed_users: config.security.allowed_users,
         backends: config.backends,
     };
 
-    adapter::telegram::start(tg_config, session_manager).await?;
+    adapter::telegram::start(bot, tg_config, session_manager).await?;
 
     Ok(())
 }

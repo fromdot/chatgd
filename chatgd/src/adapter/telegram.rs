@@ -1,5 +1,5 @@
-use crate::backend::{find_backend, subprocess, BackendConfig};
-use crate::session::{LogEntry, SessionManager};
+use crate::backend::{parse_subcommand, subprocess, BackendConfig};
+use crate::session::{format_context, LogEntry, SessionManager};
 use anyhow::Result;
 use std::sync::Arc;
 use teloxide::prelude::*;
@@ -7,12 +7,12 @@ use tracing::{error, info};
 
 pub struct TelegramConfig {
     pub token: String,
+    pub bot_username: String,
     pub allowed_users: Vec<u64>,
     pub backends: Vec<BackendConfig>,
 }
 
-pub async fn start(config: TelegramConfig, session_manager: Arc<SessionManager>) -> Result<()> {
-    let bot = Bot::new(&config.token);
+pub async fn start(bot: Bot, config: TelegramConfig, session_manager: Arc<SessionManager>) -> Result<()> {
     let config = Arc::new(config);
 
     let handler = Update::filter_message().endpoint(
@@ -71,41 +71,81 @@ async fn handle_message(
         error!("Failed to log user message: {}", e);
     }
 
-    // 3. Find backend
-    let is_reply_to_bot = msg.reply_to_message().map_or(false, |m| {
-        m.from().map_or(false, |u| u.is_bot)
-    });
-    let is_cmd = text.starts_with("/ask");
+    // 3. Check for bot mention
+    let mention_str = format!("@{}", cfg.bot_username);
+    if !text.contains(&mention_str) {
+        return; // Just logged, no action needed
+    }
 
-    if let Some((backend, prompt)) = find_backend(&cfg.backends, text, is_reply_to_bot || is_cmd) {
-        let session_dir = sm.ensure_session_dir(chat_id);
-        
-        // 4. Execute subprocess
-        let response_text = match subprocess::execute(&backend, &prompt, &session_dir).await {
-            Ok(out) => if out.is_empty() { "[No output]".to_string() } else { out },
-            Err(e) => format!("Error: {}", e),
-        };
+    let raw_text = text.replace(&mention_str, "").trim().to_string();
 
-        let elapsed = start_time.elapsed().as_millis() as u64;
-
-        // Log response
-        let resp_log = LogEntry {
-            ts: chrono::Utc::now(),
-            from: backend.name.clone(),
-            uid: None,
-            username: None,
-            text: response_text.clone(),
-            elapsed_ms: Some(elapsed),
-        };
-        let _ = sm.append_log(chat_id, &resp_log);
-
-        // 5. Send response back (split if > 4096 chars)
-        let chunks = response_text.as_bytes().chunks(4000); // safe margin
-        for chunk in chunks {
-            let s = String::from_utf8_lossy(chunk);
-            if let Err(e) = bot.send_message(msg.chat.id, s.to_string()).await {
-                error!("Failed to send message chunk: {}", e);
+    // 4. Handle built-in commands
+    if raw_text == "/reset" {
+        let session_dir = sm.ensure_session_dir(chat_id, None);
+        // Only removing subdirectories (backends) to keep log.jsonl
+        if let Ok(entries) = std::fs::read_dir(&session_dir) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_dir() {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
             }
+        }
+        let _ = bot.send_message(msg.chat.id, "세션 초기화 완료").await;
+        return;
+    }
+
+    if raw_text == "/status" {
+        let log_count = sm.collect_context(chat_id, 99999).len(); // Unprocessed msgs
+        let _ = bot.send_message(msg.chat.id, format!("현재 미처리 메시지 수: {}", log_count)).await;
+        return;
+    }
+
+    // 5. Parse backend subcommand
+    let (backend_opt, prompt) = parse_subcommand(&raw_text, &cfg.backends);
+    let backend = match backend_opt {
+        Some(b) => b,
+        None => match BackendConfig::default_backend(&cfg.backends) {
+            Some(b) => b.clone(),
+            None => {
+                let _ = bot.send_message(msg.chat.id, "기본 백엔드가 설정되어 있지 않습니다.").await;
+                return;
+            }
+        }
+    };
+
+    // 6. Collect context & format prompt
+    let context_entries = sm.collect_context(chat_id, 50);
+    let full_prompt = format_context(&context_entries, &prompt);
+
+    // 7. Execute subprocess
+    let session_dir = sm.ensure_session_dir(chat_id, Some(&backend.name));
+    
+    let response_text = match subprocess::execute(&backend, &full_prompt, &session_dir).await {
+        Ok(out) => if out.is_empty() { "[No output]".to_string() } else { out },
+        Err(e) => format!("Error: {}", e),
+    };
+
+    let elapsed = start_time.elapsed().as_millis() as u64;
+
+    // 8. Log response
+    let resp_log = LogEntry {
+        ts: chrono::Utc::now(),
+        from: backend.name.clone(),
+        uid: None,
+        username: None,
+        text: response_text.clone(),
+        elapsed_ms: Some(elapsed),
+    };
+    let _ = sm.append_log(chat_id, &resp_log);
+
+    // 9. Send response back
+    let chunks = response_text.as_bytes().chunks(4000);
+    for chunk in chunks {
+        let s = String::from_utf8_lossy(chunk);
+        if let Err(e) = bot.send_message(msg.chat.id, s.to_string()).await {
+            error!("Failed to send message chunk: {}", e);
         }
     }
 }

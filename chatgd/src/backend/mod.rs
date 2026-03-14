@@ -11,28 +11,19 @@ pub struct BackendConfig {
     pub default: bool,
 }
 
-pub fn find_backend(backends: &[BackendConfig], text: &str, is_reply_or_cmd: bool) -> Option<(BackendConfig, String)> {
-    // 1. Check for explicit triggers
+impl BackendConfig {
+    pub fn default_backend(backends: &[BackendConfig]) -> Option<&BackendConfig> {
+        backends.iter().find(|b| b.default)
+    }
+}
+
+pub fn parse_subcommand(text: &str, backends: &[BackendConfig]) -> (Option<BackendConfig>, String) {
     for backend in backends {
-        if let Some(trigger) = &backend.trigger {
-            if text.contains(trigger) {
-                let prompt = text.replace(trigger, "").trim().to_string();
-                return Some((backend.clone(), prompt));
-            }
+        let prefix = format!("/{}", backend.name);
+        if text.starts_with(&prefix) {
+            let prompt = text[prefix.len()..].trim().to_string();
+            return (Some(backend.clone()), prompt);
         }
     }
-
-    // 2. Fallback to default if applicable
-    if is_reply_or_cmd {
-        if let Some(default_backend) = backends.iter().find(|b| b.default) {
-            let prompt = if text.starts_with("/ask") {
-                text.replacen("/ask", "", 1).trim().to_string()
-            } else {
-                text.trim().to_string()
-            };
-            return Some((default_backend.clone(), prompt));
-        }
-    }
-
-    None
+    (None, text.to_string())
 }
