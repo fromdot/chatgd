@@ -6,6 +6,7 @@ use teloxide::prelude::*;
 use tracing::{error, info};
 
 pub struct TelegramConfig {
+    #[allow(dead_code)]
     pub token: String,
     pub bot_username: String,
     pub allowed_users: Vec<u64>,
@@ -85,10 +86,10 @@ async fn handle_message(
         // Only removing subdirectories (backends) to keep log.jsonl
         if let Ok(entries) = std::fs::read_dir(&session_dir) {
             for entry in entries.flatten() {
-                if let Ok(ft) = entry.file_type() {
-                    if ft.is_dir() {
-                        let _ = std::fs::remove_dir_all(entry.path());
-                    }
+                if let Ok(ft) = entry.file_type()
+                    && ft.is_dir()
+                {
+                    let _ = std::fs::remove_dir_all(entry.path());
                 }
             }
         }

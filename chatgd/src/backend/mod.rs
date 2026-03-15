@@ -6,6 +6,7 @@ pub mod subprocess;
 pub struct BackendConfig {
     pub name: String,
     pub command: Vec<String>,
+    #[allow(dead_code)]
     pub trigger: Option<String>,
     #[serde(default)]
     pub default: bool,
